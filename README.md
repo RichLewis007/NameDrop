@@ -1,4 +1,4 @@
-# Name Dropper
+# NameDrop
 
 A PySide6 application to help rename files and folders with non-standard ASCII characters, making them compatible across different operating systems and cloud services.
 
@@ -7,6 +7,7 @@ A PySide6 application to help rename files and folders with non-standard ASCII c
 - **Drag and Drop Interface**: Simply drag files or folders onto the window
 - **Visual Highlighting**: Non-standard ASCII characters are highlighted in yellow for easy identification
 - **Multiple Rename Options**:
+
   - **Auto Rename**: Replaces accented characters with unaccented equivalents and removes other non-ASCII characters
   - **Remove bad characters**: Strips all non-standard ASCII characters
   - **Replace bad characters**: Only replaces accented characters, keeps other characters
@@ -14,6 +15,7 @@ A PySide6 application to help rename files and folders with non-standard ASCII c
   - **Ignore File**: Skip files you don't want to process
 
 - **Safety Features**:
+
   - Optional backup creation before renaming
   - Preview dialog before renaming (can be disabled)
   - Validation to prevent overwriting existing files
@@ -27,14 +29,10 @@ A PySide6 application to help rename files and folders with non-standard ASCII c
 ## Installation
 
 1. Install Python 3.8 or higher
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+2. Install dependencies using uv:
 
-Or using uv (recommended):
 ```bash
-uv pip install -r requirements.txt
+uv sync
 ```
 
 ## Usage
@@ -51,9 +49,9 @@ python main.py
 ## Settings
 
 The application saves your preferences including:
+
 - Window position and screen
 - Checkbox states (prompt before rename, backup, ignore common chars)
 - Custom allowed characters list
 
 Settings are stored in your system's standard configuration location.
-

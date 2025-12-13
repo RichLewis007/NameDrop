@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Name Dropper - A PySide6 application to rename files/folders with non-standard ASCII characters
+NameDrop - A PySide6 application to rename files/folders with non-standard ASCII characters
 """
 
 import sys
@@ -15,6 +15,66 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QTextCharFormat, 
 
 from file_operations import FileOperations
 from character_utils import CharacterUtils
+
+
+class LeadingTrailingIssueDialog(QDialog):
+    """Dialog to show leading/trailing space/period issues and offer to fix"""
+    
+    def __init__(self, file_name: str, issues: list, parent=None):
+        super().__init__(parent)
+        self.file_name = file_name
+        self.issues = issues
+        self.fixed_name = None
+        self.setWindowTitle("Filename Issue Detected")
+        self.setModal(True)
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QVBoxLayout()
+        
+        layout.addWidget(QLabel("The filename has the following issues:"))
+        
+        # List issues
+        issues_text = QLabel("\n".join(f"• {issue}" for issue in self.issues))
+        issues_text.setStyleSheet("padding: 10px; background-color: #fff3e0; font-size: 11pt;")
+        layout.addWidget(issues_text)
+        
+        # Show current name
+        layout.addWidget(QLabel("Current filename:"))
+        current_label = QLabel(f'"{self.file_name}"')
+        current_label.setStyleSheet("font-size: 12pt; padding: 5px; background-color: #f0f0f0; font-family: monospace;")
+        layout.addWidget(current_label)
+        
+        # Show fixed name if we can fix it
+        if self.can_fix():
+            fixed = self.get_fixed_name()
+            layout.addWidget(QLabel("Fixed filename:"))
+            fixed_label = QLabel(f'"{fixed}"')
+            fixed_label.setStyleSheet("font-size: 12pt; padding: 5px; background-color: #e8f5e9; font-family: monospace;")
+            layout.addWidget(fixed_label)
+        
+        buttons = QDialogButtonBox()
+        if self.can_fix():
+            fix_btn = buttons.addButton("Fix by removing offending character(s)", QDialogButtonBox.AcceptRole)
+            fix_btn.clicked.connect(self.accept_fix)
+        cancel_btn = buttons.addButton("Cancel", QDialogButtonBox.RejectRole)
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+        
+        self.setLayout(layout)
+    
+    def can_fix(self):
+        """Check if we can fix the issues"""
+        return len(self.file_name.strip(' .')) > 0  # Make sure there's something left after stripping
+    
+    def get_fixed_name(self):
+        """Get the fixed name"""
+        return self.file_name.strip(' .')
+    
+    def accept_fix(self):
+        """Accept the fix"""
+        self.fixed_name = self.get_fixed_name()
+        self.accept()
 
 
 class RenamePreviewDialog(QDialog):
@@ -115,12 +175,12 @@ class DragDropWidget(QWidget):
         event.acceptProposedAction()
 
 
-class FileNameFixerApp(QMainWindow):
+class NameDropApp(QMainWindow):
     """Main application window"""
     
     def __init__(self):
         super().__init__()
-        self.settings = QSettings("NameDropper", "NameDropper")
+        self.settings = QSettings("NameDrop", "NameDrop")
         self.current_file_path = None
         self.current_file_name = None
         self.processed_files = set()  # Track ignored files
@@ -138,7 +198,7 @@ class FileNameFixerApp(QMainWindow):
         layout = QVBoxLayout(central_widget)
         
         # Title
-        title = QLabel("Name Dropper")
+        title = QLabel("NameDrop")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("font-size: 20pt; font-weight: bold; padding: 10px;")
         layout.addWidget(title)
@@ -219,7 +279,7 @@ class FileNameFixerApp(QMainWindow):
         self.status_label.setStyleSheet("padding: 5px; background-color: #e3f2fd;")
         layout.addWidget(self.status_label)
         
-        self.setWindowTitle("Name Dropper")
+        self.setWindowTitle("NameDrop")
         self.resize(800, 700)
         
     def load_settings(self):
@@ -363,11 +423,40 @@ class FileNameFixerApp(QMainWindow):
             ignore_text = self.ignore_chars_edit.text()
             ignore_chars = set(char for char in ignore_text if char.strip())
         return ignore_chars
+    
+    def check_leading_trailing_issues(self, file_name: str):
+        """Check for leading/trailing spaces and periods, return list of issues"""
+        issues = []
+        if file_name.startswith(' '):
+            issues.append("Filename starts with a space")
+        if file_name.endswith(' '):
+            issues.append("Filename ends with a space")
+        if file_name.startswith('.'):
+            issues.append("Filename starts with a period")
+        if file_name.endswith('.'):
+            issues.append("Filename ends with a period")
+        return issues
         
     def perform_rename(self, new_name: str, operation_description: str):
         """Perform the actual rename operation"""
         if not self.current_file_path or not new_name:
             return False
+        
+        # Check for leading/trailing spaces and periods
+        issues = self.check_leading_trailing_issues(new_name)
+        if issues:
+            dialog = LeadingTrailingIssueDialog(new_name, issues, self)
+            result = dialog.exec()
+            if result == QDialog.Accepted and dialog.fixed_name:
+                new_name = dialog.fixed_name
+                # Re-validate the fixed name
+                if not new_name.strip():
+                    QMessageBox.warning(self, "Invalid Name", 
+                                      "After removing leading/trailing characters, the filename is empty.")
+                    return False
+            else:
+                # User cancelled
+                return False
         
         # Validate new name
         if not new_name.strip():
@@ -525,9 +614,9 @@ class FileNameFixerApp(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("Name Dropper")
+    app.setApplicationName("NameDrop")
     
-    window = FileNameFixerApp()
+    window = NameDropApp()
     window.setWindowFlags(window.windowFlags() | Qt.WindowStaysOnTopHint)
     window.show()
     
