@@ -17,6 +17,46 @@ from file_operations import FileOperations
 from character_utils import CharacterUtils
 
 
+# Platform compatibility data
+PLATFORM_RESTRICTIONS = {
+    "Everything": {
+        "name": "Everything (All Platforms)",
+        "excluded_chars": set('<>:"|?*\\/'),  # No spaces - spaces are allowed, only position matters
+        "problematic_chars": set('!@#$%^&()[]{};,=+'),  # No spaces
+        "excluded_positions": ["trailing_space", "trailing_period", "leading_space"],
+        "description": "Most restrictive - ensures compatibility with Windows, macOS, Linux, and all cloud platforms"
+    },
+    "Windows": {
+        "name": "Windows OS",
+        "excluded_chars": set('<>:"|?*\\/'),  # No spaces - spaces are allowed, only position matters
+        "problematic_chars": set(),
+        "excluded_positions": ["trailing_space", "trailing_period"],
+        "description": "Windows file system restrictions. Trailing spaces and periods are automatically stripped."
+    },
+    "macOS": {
+        "name": "macOS",
+        "excluded_chars": set(':/'),  # No spaces
+        "problematic_chars": set(),
+        "excluded_positions": [],
+        "description": "macOS allows most characters. Only colon (:) and forward slash (/) are forbidden."
+    },
+    "Linux": {
+        "name": "Linux",
+        "excluded_chars": set('/'),  # No spaces
+        "problematic_chars": set(),
+        "excluded_positions": [],
+        "description": "Linux is very permissive. Only forward slash (/) is forbidden."
+    },
+    "Cloud": {
+        "name": "Cloud Drives",
+        "excluded_chars": set('<>:"|?*\\/'),  # No spaces - spaces are allowed, only position matters
+        "problematic_chars": set('!@#$%^&()[]{};,=+'),  # No spaces
+        "excluded_positions": ["trailing_space", "trailing_period"],
+        "description": "Cloud platforms (OneDrive, Dropbox, etc.) typically follow Windows restrictions for compatibility."
+    }
+}
+
+
 class LeadingTrailingIssueDialog(QDialog):
     """Dialog to show leading/trailing space/period issues and offer to fix"""
     
@@ -137,6 +177,25 @@ class FileNameDisplay(QTextEdit):
                 cursor.insertText(char, format_normal)
 
 
+class PlatformButton(QPushButton):
+    """Custom button that emits hover signals"""
+    
+    hover_entered = Signal(str)  # platform_key
+    hover_left = Signal()
+    
+    def __init__(self, platform_key, text, parent=None):
+        super().__init__(text, parent)
+        self.platform_key = platform_key
+    
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.hover_entered.emit(self.platform_key)
+    
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.hover_left.emit()
+
+
 class DragDropWidget(QWidget):
     """Widget that accepts drag and drop of files/folders"""
     
@@ -184,6 +243,9 @@ class NameDropApp(QMainWindow):
         self.current_file_path = None
         self.current_file_name = None
         self.processed_files = set()  # Track ignored files
+        self.selected_platforms = set()  # Track selected platform compatibility buttons
+        self.platform_selection_order = []  # Track order of platform selection (most recent first)
+        self.compatibility_filtered_name = None  # Store the filtered name based on selected platforms
         
         self.char_utils = CharacterUtils()
         self.file_ops = FileOperations()
@@ -208,10 +270,104 @@ class NameDropApp(QMainWindow):
         self.drag_drop.files_dropped.connect(self.on_files_dropped)
         layout.addWidget(self.drag_drop)
         
-        # File name display with highlighting
-        layout.addWidget(QLabel("File name (non-standard ASCII highlighted):"))
+        # File name display with highlighting and RENAME button
+        filename_header_layout = QHBoxLayout()
+        filename_header_layout.addWidget(QLabel("File name (non-standard ASCII highlighted):"))
+        filename_header_layout.addStretch()
+        self.rename_btn = QPushButton("RENAME")
+        self.rename_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 16pt;
+                font-weight: bold;
+                padding: 10px 20px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
+        self.rename_btn.setEnabled(False)
+        self.rename_btn.clicked.connect(self.rename_with_compatibility_filter)
+        filename_header_layout.addWidget(self.rename_btn)
+        layout.addLayout(filename_header_layout)
+        
         self.file_name_display = FileNameDisplay()
         layout.addWidget(self.file_name_display)
+        
+        # Platform compatibility section
+        compatibility_group = QGroupBox("Make compatible with:")
+        compatibility_layout = QVBoxLayout()
+        
+        # Platform buttons (horizontal)
+        buttons_layout = QHBoxLayout()
+        self.platform_buttons = {}
+        platform_keys = ["Everything", "Windows", "macOS", "Linux", "Cloud"]
+        
+        for platform_key in platform_keys:
+            btn = PlatformButton(platform_key, PLATFORM_RESTRICTIONS[platform_key]["name"])
+            btn.setCheckable(True)
+            btn.setStyleSheet("""
+                QPushButton {
+                    padding: 8px 15px;
+                    border: 2px solid #ccc;
+                    border-radius: 5px;
+                    background-color: #f5f5f5;
+                }
+                QPushButton:hover {
+                    background-color: #e3f2fd;
+                    border-color: #0066cc;
+                }
+                QPushButton:checked {
+                    background-color: #4CAF50;
+                    color: white;
+                    border-color: #45a049;
+                }
+            """)
+            btn.clicked.connect(lambda checked, key=platform_key: self.on_platform_button_clicked(key, checked))
+            btn.hover_entered.connect(self.on_platform_button_hover)
+            btn.hover_left.connect(self.on_platform_button_leave)
+            buttons_layout.addWidget(btn)
+            self.platform_buttons[platform_key] = btn
+        
+        buttons_layout.addStretch()
+        compatibility_layout.addLayout(buttons_layout)
+        
+        # Information display area (shows excluded/problematic characters) - scrollable
+        self.compatibility_info_label = QLabel("Hover over a platform button to see restrictions, or click to apply filters.")
+        self.compatibility_info_label.setWordWrap(True)
+        self.compatibility_info_label.setTextFormat(Qt.RichText)  # Enable HTML
+        self.compatibility_info_label.setStyleSheet("""
+            QLabel {
+                padding: 10px;
+                background-color: #f9f9f9;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                min-height: 80px;
+            }
+        """)
+        # Wrap in scroll area for long content
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(self.compatibility_info_label)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMinimumHeight(100)
+        scroll_area.setMaximumHeight(200)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                background-color: #f9f9f9;
+            }
+        """)
+        compatibility_layout.addWidget(scroll_area)
+        
+        compatibility_group.setLayout(compatibility_layout)
+        layout.addWidget(compatibility_group)
         
         # Ignore common characters group
         ignore_group = QGroupBox("Ignore Common Special Characters")
@@ -355,6 +511,13 @@ class NameDropApp(QMainWindow):
         if os.path.exists(file_path):
             self.current_file_path = file_path
             self.current_file_name = os.path.basename(file_path)
+            self.compatibility_filtered_name = None
+            # Reset platform selections when new file is dropped
+            for btn in self.platform_buttons.values():
+                btn.setChecked(False)
+            self.selected_platforms = set()
+            self.platform_selection_order = []
+            self.update_compatibility_info()
             self.on_file_selected()
         else:
             self.status_label.setText(f"Error: File not found - {file_path}")
@@ -386,8 +549,12 @@ class NameDropApp(QMainWindow):
         # Find bad characters
         bad_chars = self.char_utils.find_non_standard_ascii(self.current_file_name, ignore_chars)
         
-        # Update display
-        self.file_name_display.set_file_name(self.current_file_name, bad_chars, ignore_chars)
+        # Apply compatibility filter if platforms are selected
+        if self.selected_platforms:
+            self.apply_compatibility_filter()
+        else:
+            # Update display
+            self.file_name_display.set_file_name(self.current_file_name, bad_chars, ignore_chars)
         
         # Enable buttons if there are bad characters
         has_bad_chars = bool(bad_chars - ignore_chars)
@@ -423,6 +590,258 @@ class NameDropApp(QMainWindow):
             ignore_text = self.ignore_chars_edit.text()
             ignore_chars = set(char for char in ignore_text if char.strip())
         return ignore_chars
+    
+    def get_combined_restrictions(self, platforms):
+        """Get combined restrictions from selected platforms"""
+        if not platforms:
+            return {"excluded_chars": set(), "problematic_chars": set(), "excluded_positions": []}
+        
+        excluded_chars = set()
+        problematic_chars = set()
+        excluded_positions = []
+        
+        for platform_key in platforms:
+            platform = PLATFORM_RESTRICTIONS[platform_key]
+            excluded_chars.update(platform["excluded_chars"])
+            problematic_chars.update(platform["problematic_chars"])
+            excluded_positions.extend(platform["excluded_positions"])
+        
+        # Remove duplicates from excluded_positions
+        excluded_positions = list(set(excluded_positions))
+        
+        return {
+            "excluded_chars": excluded_chars,
+            "problematic_chars": problematic_chars,
+            "excluded_positions": excluded_positions
+        }
+    
+    def format_restrictions_info(self, platforms):
+        """Format restriction information for display in selection order (most recent first)"""
+        if not platforms:
+            return "No platforms selected."
+        
+        lines = []
+        # Display in selection order (most recently selected first)
+        # The platform_selection_order list already has most recent first
+        # Filter to only show platforms that are currently selected
+        display_order = [p for p in self.platform_selection_order if p in platforms]
+        # Add any platforms that are selected but not in the order list (shouldn't happen, but safety)
+        for p in platforms:
+            if p not in display_order:
+                display_order.insert(0, p)  # Add to front if missing
+        
+        for platform_key in display_order:
+            platform = PLATFORM_RESTRICTIONS[platform_key]
+            lines.append(f"<b>{platform['name']}:</b>")
+            
+            # Excluded characters
+            if platform["excluded_chars"]:
+                excluded_list = sorted(platform["excluded_chars"])
+                excluded_display = " ".join(f"<code>{c}</code>" if c != " " else "<code>space</code>" for c in excluded_list)
+                lines.append(f"  • <b>Excluded characters:</b> {excluded_display}")
+            
+            # Problematic characters
+            if platform["problematic_chars"]:
+                problematic_list = sorted(platform["problematic_chars"])
+                problematic_display = " ".join(f"<code>{c}</code>" for c in problematic_list)
+                lines.append(f"  • <b>Problematic characters:</b> {problematic_display}")
+            
+            # Position restrictions
+            position_descriptions = {
+                "trailing_space": "Trailing space",
+                "trailing_period": "Trailing period",
+                "leading_space": "Leading space",
+                "leading_period": "Leading period"
+            }
+            if platform["excluded_positions"]:
+                positions = [position_descriptions.get(p, p) for p in platform["excluded_positions"]]
+                lines.append(f"  • <b>Position restrictions:</b> {', '.join(positions)}")
+            
+            lines.append(f"  • <i>{platform['description']}</i>")
+            lines.append("")
+        
+        return "<br>".join(lines)
+    
+    def on_platform_button_hover(self, platform_key):
+        """Show platform restrictions on hover"""
+        platform = PLATFORM_RESTRICTIONS[platform_key]
+        info = f"<b>{platform['name']}:</b><br><br>"
+        
+        if platform["excluded_chars"]:
+            excluded_list = sorted(platform["excluded_chars"])
+            excluded_display = " ".join(f"<code>{c}</code>" if c != " " else "<code>space</code>" for c in excluded_list)
+            info += f"<b>Excluded characters:</b> {excluded_display}<br>"
+        
+        if platform["problematic_chars"]:
+            problematic_list = sorted(platform["problematic_chars"])
+            problematic_display = " ".join(f"<code>{c}</code>" for c in problematic_list)
+            info += f"<b>Problematic characters:</b> {problematic_display}<br>"
+        
+        position_descriptions = {
+            "trailing_space": "Trailing space",
+            "trailing_period": "Trailing period",
+            "leading_space": "Leading space",
+            "leading_period": "Leading period"
+        }
+        if platform["excluded_positions"]:
+            positions = [position_descriptions.get(p, p) for p in platform["excluded_positions"]]
+            info += f"<b>Position restrictions:</b> {', '.join(positions)}<br>"
+        
+        info += f"<br><i>{platform['description']}</i>"
+        self.compatibility_info_label.setText(info)
+    
+    def on_platform_button_leave(self):
+        """Clear hover info or show selected platforms"""
+        if self.selected_platforms:
+            self.update_compatibility_info()
+        else:
+            self.compatibility_info_label.setText("Hover over a platform button to see restrictions, or click to apply filters.")
+    
+    def on_platform_button_clicked(self, platform_key, checked):
+        """Handle platform button click"""
+        if platform_key == "Everything":
+            # "Everything" checks all other buttons
+            if checked:
+                # Check all other platform buttons
+                for key in self.platform_buttons:
+                    if key != "Everything":
+                        self.platform_buttons[key].setChecked(True)
+                self.selected_platforms = set(self.platform_buttons.keys())
+                # Update selection order - "Everything" first, then others
+                self.platform_selection_order = ["Everything"] + [k for k in self.platform_buttons.keys() if k != "Everything"]
+            else:
+                # Uncheck all buttons
+                for btn in self.platform_buttons.values():
+                    btn.setChecked(False)
+                self.selected_platforms = set()
+                self.platform_selection_order = []
+        else:
+            # Uncheck "Everything" if selecting specific platforms
+            if checked:
+                self.platform_buttons["Everything"].setChecked(False)
+                if "Everything" in self.selected_platforms:
+                    self.selected_platforms.remove("Everything")
+                    # Remove "Everything" from selection order
+                    if "Everything" in self.platform_selection_order:
+                        self.platform_selection_order.remove("Everything")
+                self.selected_platforms.add(platform_key)
+                # Add to front of selection order (most recent first)
+                if platform_key in self.platform_selection_order:
+                    self.platform_selection_order.remove(platform_key)
+                self.platform_selection_order.insert(0, platform_key)
+            else:
+                self.selected_platforms.discard(platform_key)
+                # Remove from selection order
+                if platform_key in self.platform_selection_order:
+                    self.platform_selection_order.remove(platform_key)
+                # If all specific platforms are unchecked, uncheck "Everything" too
+                if not self.selected_platforms:
+                    self.platform_buttons["Everything"].setChecked(False)
+                    self.platform_selection_order = []
+        
+        self.update_compatibility_info()
+        self.apply_compatibility_filter()
+    
+    def update_compatibility_info(self):
+        """Update the compatibility info display"""
+        if self.selected_platforms:
+            info = self.format_restrictions_info(self.selected_platforms)
+            self.compatibility_info_label.setText(info)
+        else:
+            self.compatibility_info_label.setText("Hover over a platform button to see restrictions, or click to apply filters.")
+    
+    def apply_compatibility_filter(self):
+        """Apply compatibility filter to the current filename"""
+        if not self.current_file_name:
+            self.compatibility_filtered_name = None
+            self.rename_btn.setEnabled(False)
+            return
+        
+        if not self.selected_platforms:
+            self.compatibility_filtered_name = None
+            self.rename_btn.setEnabled(False)
+            if self.current_file_name:
+                # Show original filename
+                ignore_chars = self.get_ignore_chars()
+                bad_chars = self.char_utils.find_non_standard_ascii(self.current_file_name, ignore_chars)
+                self.file_name_display.set_file_name(self.current_file_name, bad_chars, ignore_chars)
+            return
+        
+        restrictions = self.get_combined_restrictions(self.selected_platforms)
+        filtered_name = self.current_file_name
+        
+        # Remove excluded characters (spaces are NOT excluded - they're allowed in filenames)
+        # Only remove leading/trailing spaces based on position restrictions
+        for char in restrictions["excluded_chars"]:
+            # Never remove spaces - they're allowed characters, only position matters
+            if char != " ":
+                filtered_name = filtered_name.replace(char, "")
+        
+        # Remove problematic characters (spaces are NOT problematic)
+        for char in restrictions["problematic_chars"]:
+            # Never remove spaces - they're allowed characters
+            if char != " ":
+                filtered_name = filtered_name.replace(char, "")
+        
+        # Handle position restrictions - only remove spaces at specific positions
+        if "trailing_space" in restrictions["excluded_positions"]:
+            filtered_name = filtered_name.rstrip(" ")
+        if "trailing_period" in restrictions["excluded_positions"]:
+            # Remove trailing periods but keep the one before extension (if it exists)
+            # Split filename and extension
+            if "." in filtered_name:
+                name_part, ext_part = filtered_name.rsplit(".", 1)
+                # Remove trailing periods from name part only
+                name_part = name_part.rstrip(".")
+                filtered_name = name_part + "." + ext_part if name_part or ext_part else filtered_name.rstrip(".")
+            else:
+                # No extension, remove all trailing periods
+                filtered_name = filtered_name.rstrip(".")
+        if "leading_space" in restrictions["excluded_positions"]:
+            filtered_name = filtered_name.lstrip(" ")
+        if "leading_period" in restrictions["excluded_positions"]:
+            filtered_name = filtered_name.lstrip(".")
+        
+        self.compatibility_filtered_name = filtered_name
+        
+        # Update display with filtered name
+        if filtered_name != self.current_file_name:
+            # Show what was removed
+            ignore_chars = self.get_ignore_chars()
+            # Find characters that were removed
+            removed_chars = set()
+            for char in self.current_file_name:
+                if char not in filtered_name:
+                    removed_chars.add(char)
+            
+            # Show filtered name with removed characters highlighted
+            bad_chars = self.char_utils.find_non_standard_ascii(filtered_name, ignore_chars)
+            bad_chars.update(removed_chars)  # Also highlight removed chars if they appear in original
+            self.file_name_display.set_file_name(filtered_name, bad_chars, ignore_chars)
+            self.rename_btn.setEnabled(True)
+        else:
+            # No changes needed
+            ignore_chars = self.get_ignore_chars()
+            bad_chars = self.char_utils.find_non_standard_ascii(filtered_name, ignore_chars)
+            self.file_name_display.set_file_name(filtered_name, bad_chars, ignore_chars)
+            self.rename_btn.setEnabled(False)
+    
+    def rename_with_compatibility_filter(self):
+        """Perform rename using the compatibility filtered name"""
+        if not self.compatibility_filtered_name or not self.current_file_path:
+            return
+        
+        if self.compatibility_filtered_name == self.current_file_name:
+            QMessageBox.information(self, "No Changes", "The filename is already compatible with the selected platforms.")
+            return
+        
+        # Show preview if prompting is enabled
+        if self.prompt_check.isChecked():
+            dialog = RenamePreviewDialog(self.current_file_name, self.compatibility_filtered_name, self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+        
+        self.perform_rename(self.compatibility_filtered_name, "Platform compatibility filter")
     
     def check_leading_trailing_issues(self, file_name: str):
         """Check for leading/trailing spaces and periods, return list of issues"""
