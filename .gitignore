@@ -1,6 +1,8 @@
 # Local only files
 local/
+test-files/
 run.sh
+main.ui
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

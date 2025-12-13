@@ -55,3 +55,7 @@ The application saves your preferences including:
 - Custom allowed characters list
 
 Settings are stored in your system's standard configuration location.
+
+## Platform Restrictions
+
+For detailed information about filename restrictions across different operating systems and file systems (Windows, macOS, Linux, Cloud Drives, FAT32), see [PLATFORM-RESTRICTIONS.md](PLATFORM-RESTRICTIONS.md).

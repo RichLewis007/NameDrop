@@ -5,13 +5,15 @@ NameDrop - A PySide6 application to rename files/folders with non-standard ASCII
 
 import sys
 import os
+import random
+import string
 from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                 QHBoxLayout, QLabel, QPushButton, QCheckBox, 
                                 QLineEdit, QMessageBox, QGroupBox, QTextEdit,
                                 QScrollArea, QDialog, QDialogButtonBox, QSizePolicy)
 from PySide6.QtCore import Qt, QSettings, QPoint, QSize, Signal, QStandardPaths
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QTextCharFormat, QFont, QTextCursor
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QColor, QTextCharFormat, QFont, QTextCursor, QPainter, QBrush, QPen
 
 from file_operations import FileOperations
 from character_utils import CharacterUtils
@@ -24,6 +26,10 @@ PLATFORM_RESTRICTIONS = {
         "excluded_chars": set('<>:"|?*\\/'),  # No spaces - spaces are allowed, only position matters
         "problematic_chars": set('!@#$%^&()[]{};,=+'),  # No spaces
         "excluded_positions": ["trailing_space", "trailing_period", "leading_space"],
+        "reserved_names": set(),  # Windows reserved names (case-insensitive check done separately)
+        "max_path_length": 260,  # Windows default MAX_PATH
+        "max_filename_length": 255,  # Conservative limit for all platforms
+        "additional_restrictions": ["no_space_period_after_ext", "no_spaces_only"],
         "description": "Most restrictive - ensures compatibility with Windows, macOS, Linux, and all cloud platforms"
     },
     "Windows": {
@@ -31,6 +37,13 @@ PLATFORM_RESTRICTIONS = {
         "excluded_chars": set('<>:"|?*\\/'),  # No spaces - spaces are allowed, only position matters
         "problematic_chars": set(),
         "excluded_positions": ["trailing_space", "trailing_period"],
+        "reserved_names": {"CON", "PRN", "AUX", "NUL", 
+                          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+                          ".", ".."},  # Reserved directory names
+        "max_path_length": 260,  # MAX_PATH default
+        "max_filename_length": 255,  # Filename length limit
+        "additional_restrictions": ["no_space_period_after_ext", "no_spaces_only"],
         "description": "Windows file system restrictions. Trailing spaces and periods are automatically stripped."
     },
     "macOS": {
@@ -38,6 +51,10 @@ PLATFORM_RESTRICTIONS = {
         "excluded_chars": set(':/'),  # No spaces
         "problematic_chars": set(),
         "excluded_positions": [],
+        "reserved_names": set(),
+        "max_path_length": 255,  # Filename length limit
+        "max_filename_length": 255,  # Filename length limit
+        "additional_restrictions": [],
         "description": "macOS allows most characters. Only colon (:) and forward slash (/) are forbidden."
     },
     "Linux": {
@@ -45,6 +62,10 @@ PLATFORM_RESTRICTIONS = {
         "excluded_chars": set('/'),  # No spaces
         "problematic_chars": set(),
         "excluded_positions": [],
+        "reserved_names": set(),
+        "max_path_length": 255,  # Filename length limit (bytes)
+        "max_filename_length": 255,  # Filename length limit (bytes)
+        "additional_restrictions": [],
         "description": "Linux is very permissive. Only forward slash (/) is forbidden."
     },
     "Cloud": {
@@ -52,7 +73,28 @@ PLATFORM_RESTRICTIONS = {
         "excluded_chars": set('<>:"|?*\\/'),  # No spaces - spaces are allowed, only position matters
         "problematic_chars": set('!@#$%^&()[]{};,=+'),  # No spaces
         "excluded_positions": ["trailing_space", "trailing_period"],
+        "reserved_names": {"CON", "PRN", "AUX", "NUL",  # Windows reserved names (OneDrive follows Windows)
+                          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+                          ".", ".."},  # Reserved directory names
+        "max_path_length": 260,  # Windows-based cloud services
+        "max_filename_length": 255,  # Filename length limit
+        "additional_restrictions": ["no_space_period_after_ext", "no_spaces_only"],
         "description": "Cloud platforms (OneDrive, Dropbox, etc.) typically follow Windows restrictions for compatibility."
+    },
+    "FAT32": {
+        "name": "FAT32",
+        "excluded_chars": set('<>:"|?*\\/'),  # Same as Windows
+        "problematic_chars": set(),
+        "excluded_positions": ["trailing_space", "trailing_period"],
+        "reserved_names": {"CON", "PRN", "AUX", "NUL",  # Same as Windows
+                          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+                          ".", ".."},  # Reserved directory names
+        "max_path_length": 260,  # Similar to Windows
+        "max_filename_length": 255,  # LFN (Long File Name) limit, 8.3 format is 11 chars (8+3)
+        "additional_restrictions": ["no_space_period_after_ext", "no_spaces_only"],
+        "description": "FAT32 file system (common on USB drives). Windows rejects names ending with space or period. Supports LFN up to 255 characters. Uses 8.3 format (8+3=11 chars) for compatibility."
     }
 }
 
@@ -149,17 +191,123 @@ class RenamePreviewDialog(QDialog):
         self.setLayout(layout)
 
 
-class FileNameDisplay(QTextEdit):
-    """Widget to display file name with highlighted non-standard ASCII characters"""
+class LEDIndicator(QLabel):
+    """Realistic LED light indicator"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setReadOnly(True)
+        self.setFixedSize(20, 20)
+        self.color = QColor(128, 128, 128)  # Default gray (off)
+        self.setStyleSheet("background-color: transparent;")
+    
+    def set_color(self, color_name):
+        """Set LED color by name"""
+        colors = {
+            "green": QColor(0, 255, 0),
+            "yellow": QColor(255, 255, 0),
+            "red": QColor(255, 0, 0),
+            "orange": QColor(255, 165, 0),
+            "purple": QColor(128, 0, 128),
+            "gray": QColor(128, 128, 128),
+            "off": QColor(80, 80, 80)
+        }
+        self.color = colors.get(color_name.lower(), QColor(128, 128, 128))
+        self.update()  # Trigger repaint
+    
+    def paintEvent(self, event):
+        """Draw the LED with a realistic look"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Draw outer ring (dark)
+        painter.setBrush(QBrush(QColor(40, 40, 40)))
+        painter.setPen(QPen(QColor(60, 60, 60), 1))
+        painter.drawEllipse(2, 2, 16, 16)
+        
+        # Draw LED body with gradient effect
+        if self.color.name() != "#808080":  # Not gray/off
+            # Create gradient for 3D effect
+            gradient = QBrush(self.color)
+            painter.setBrush(gradient)
+            painter.setPen(QPen(QColor(0, 0, 0, 0)))  # No border
+            painter.drawEllipse(4, 4, 12, 12)
+            
+            # Add highlight for 3D effect
+            highlight_color = QColor(255, 255, 255, 100)
+            painter.setBrush(QBrush(highlight_color))
+            painter.drawEllipse(5, 5, 5, 5)
+        else:
+            # Gray/off state
+            painter.setBrush(QBrush(self.color))
+            painter.setPen(QPen(QColor(0, 0, 0, 0)))
+            painter.drawEllipse(4, 4, 12, 12)
+
+
+class FileNameDisplay(QTextEdit):
+    """Widget to display and edit file name with highlighted non-standard ASCII characters"""
+    
+    text_edited = Signal(str)  # Signal emitted when user edits the text
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(False)  # Make it editable
         self.setMaximumHeight(100)
         self.setStyleSheet("font-size: 18pt; font-weight: bold; padding: 10px;")
+        self.app_reference = None  # Will store reference to parent app
+        self.ignore_chars = set()
+        self.char_utils = None
+        self._updating = False  # Flag to prevent recursive updates
         
+        # Connect text change signal to update highlighting
+        self.textChanged.connect(self.on_text_changed)
+    
+    def set_app_reference(self, app):
+        """Set reference to parent app to access ignore_chars and char_utils"""
+        self.app_reference = app
+        if app:
+            self.char_utils = app.char_utils
+    
+    def on_text_changed(self):
+        """Update highlighting when text changes"""
+        if self._updating:
+            return
+        
+        text = self.toPlainText()
+        if self.app_reference:
+            ignore_chars = self.app_reference.get_ignore_chars()
+            bad_chars = self.char_utils.find_non_standard_ascii(text, ignore_chars) if self.char_utils else set()
+            bad_chars = bad_chars - ignore_chars
+            self.update_highlighting(text, bad_chars, ignore_chars)
+            self.text_edited.emit(text)
+    
     def set_file_name(self, file_name: str, bad_chars: set, ignore_chars: set):
         """Display file name with bad characters highlighted"""
+        self._updating = True  # Prevent recursive updates
+        self.ignore_chars = ignore_chars
+        
+        # Add length restriction highlighting if platforms are selected
+        if self.app_reference and self.app_reference.selected_platforms:
+            length_bad_chars = self.app_reference.get_length_restriction_chars(file_name)
+            bad_chars = bad_chars | length_bad_chars
+        
+        # Only update if the text is different to avoid cursor jumping
+        current_text = self.toPlainText()
+        if current_text != file_name:
+            self.clear()
+            self.update_highlighting(file_name, bad_chars, ignore_chars)
+        
+        self._updating = False
+    
+    def update_highlighting(self, file_name: str, bad_chars: set, ignore_chars: set):
+        """Update highlighting for the given text"""
+        # Set updating flag to prevent recursion
+        self._updating = True
+        
+        # Store cursor position
+        cursor = self.textCursor()
+        old_position = cursor.position()
+        
+        # Clear and rebuild with highlighting
         self.clear()
         
         cursor = self.textCursor()
@@ -170,11 +318,45 @@ class FileNameDisplay(QTextEdit):
         format_highlight.setBackground(QColor(255, 255, 0))  # Yellow highlight
         format_highlight.setFont(QFont("Arial", 18, QFont.Bold))
         
-        for char in file_name:
-            if char in bad_chars and char not in ignore_chars:
+        # Check for length restrictions if app reference is available
+        length_exceeded_chars = set()
+        max_length = None
+        if self.app_reference and self.app_reference.selected_platforms:
+            length_exceeded_chars = self.app_reference.get_length_restriction_chars(file_name)
+            # Find the most restrictive max_filename_length
+            for platform_key in self.app_reference.selected_platforms:
+                platform = PLATFORM_RESTRICTIONS.get(platform_key)
+                if platform:
+                    max_len = platform.get("max_filename_length")
+                    if max_len and (max_length is None or max_len < max_length):
+                        max_length = max_len
+        
+        for i, char in enumerate(file_name):
+            # Highlight if character is in bad_chars (and not in ignore_chars) OR exceeds length limit
+            should_highlight = char in bad_chars
+            if should_highlight and ignore_chars:
+                should_highlight = char not in ignore_chars
+            
+            # Also highlight if this character position exceeds length limit
+            if not should_highlight and max_length and i >= max_length:
+                should_highlight = True
+            
+            if should_highlight:
                 cursor.insertText(char, format_highlight)
             else:
                 cursor.insertText(char, format_normal)
+        
+        # Restore cursor position if possible
+        if old_position <= len(file_name):
+            cursor.setPosition(min(old_position, len(file_name)))
+            self.setTextCursor(cursor)
+        
+        # Clear updating flag
+        self._updating = False
+    
+    def get_text(self):
+        """Get the current text from the display"""
+        return self.toPlainText()
 
 
 class PlatformButton(QPushButton):
@@ -274,6 +456,23 @@ class NameDropApp(QMainWindow):
         filename_header_layout = QHBoxLayout()
         filename_header_layout.addWidget(QLabel("File name (non-standard ASCII highlighted):"))
         filename_header_layout.addStretch()
+        self.random_btn = QPushButton("RANDOM")
+        self.random_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 14pt;
+                font-weight: bold;
+                padding: 10px 20px;
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.random_btn.clicked.connect(self.generate_random_filename)
+        filename_header_layout.addWidget(self.random_btn)
         self.rename_btn = QPushButton("RENAME")
         self.rename_btn.setStyleSheet("""
             QPushButton {
@@ -293,12 +492,74 @@ class NameDropApp(QMainWindow):
             }
         """)
         self.rename_btn.setEnabled(False)
-        self.rename_btn.clicked.connect(self.rename_with_compatibility_filter)
+        # RENAME button can rename either compatibility-filtered name or manually edited name
+        self.rename_btn.clicked.connect(self.rename_current_display)
         filename_header_layout.addWidget(self.rename_btn)
         layout.addLayout(filename_header_layout)
         
         self.file_name_display = FileNameDisplay()
+        self.file_name_display.set_app_reference(self)  # Give it reference to app
+        self.file_name_display.text_edited.connect(self.on_filename_edited)
         layout.addWidget(self.file_name_display)
+        
+        # Detection section with LED indicators
+        detection_group = QGroupBox("Detecting..")
+        detection_layout = QVBoxLayout()
+        
+        # Platform indicators with LEDs
+        platforms_layout = QVBoxLayout()
+        self.platform_leds = {}
+        platform_names = [
+            ("Windows", "Windows"),
+            ("macOS", "macOS"),
+            ("Linux", "Linux"),
+            ("Cloud", "Cloud Drives"),
+            ("FAT32", "FAT32")
+        ]
+        
+        for key, label_text in platform_names:
+            platform_row = QHBoxLayout()
+            platform_label = QLabel(label_text + ":")
+            platform_label.setMinimumWidth(100)
+            platform_row.addWidget(platform_label)
+            
+            led = LEDIndicator()
+            led.set_color("gray")  # Start as off/gray
+            platform_row.addWidget(led)
+            platform_row.addStretch()
+            
+            platforms_layout.addLayout(platform_row)
+            self.platform_leds[key] = led
+        
+        detection_layout.addLayout(platforms_layout)
+        
+        # Legend/key
+        legend_layout = QHBoxLayout()
+        legend_layout.addWidget(QLabel("Key:"))
+        
+        legend_items = [
+            ("Green", "green", "OK"),
+            ("Yellow", "yellow", "non-standard chars"),
+            ("Red", "red", "Invalid chars"),
+            ("Orange", "orange", "Problematic"),
+            ("Purple", "purple", "Restrictions")
+        ]
+        
+        for color_name, color_code, description in legend_items:
+            legend_item = QHBoxLayout()
+            led = LEDIndicator()
+            led.set_color(color_code)
+            led.setFixedSize(16, 16)
+            legend_item.addWidget(led)
+            legend_item.addWidget(QLabel(f"{color_name}: {description}"))
+            legend_layout.addLayout(legend_item)
+            legend_layout.addSpacing(10)
+        
+        legend_layout.addStretch()
+        detection_layout.addLayout(legend_layout)
+        
+        detection_group.setLayout(detection_layout)
+        layout.addWidget(detection_group)
         
         # Platform compatibility section
         compatibility_group = QGroupBox("Make compatible with:")
@@ -307,7 +568,7 @@ class NameDropApp(QMainWindow):
         # Platform buttons (horizontal)
         buttons_layout = QHBoxLayout()
         self.platform_buttons = {}
-        platform_keys = ["Everything", "Windows", "macOS", "Linux", "Cloud"]
+        platform_keys = ["Everything", "Windows", "macOS", "Linux", "Cloud", "FAT32"]
         
         for platform_key in platform_keys:
             btn = PlatformButton(platform_key, PLATFORM_RESTRICTIONS[platform_key]["name"])
@@ -379,6 +640,10 @@ class NameDropApp(QMainWindow):
         
         self.ignore_chars_edit = QLineEdit(self.char_utils.get_common_allowed_chars())
         self.ignore_chars_edit.setPlaceholderText("Characters to ignore (separated by spaces)")
+        # Auto-save when text changes so it persists even if app crashes
+        self.ignore_chars_edit.textChanged.connect(self.save_allowed_chars)
+        # Update display when ignore chars change (but only if we have a file selected)
+        # Note: We use on_file_selected which will safely update the display
         self.ignore_chars_edit.textChanged.connect(self.on_file_selected)
         ignore_layout.addWidget(QLabel("Allowed characters:"))
         ignore_layout.addWidget(self.ignore_chars_edit)
@@ -465,6 +730,11 @@ class NameDropApp(QMainWindow):
         ignore_chars = self.settings.value("ignore_chars", self.char_utils.get_common_allowed_chars())
         self.ignore_chars_edit.setText(ignore_chars)
         
+    def save_allowed_chars(self):
+        """Save allowed characters immediately when changed"""
+        self.settings.setValue("ignore_chars", self.ignore_chars_edit.text())
+        self.settings.sync()  # Force immediate write to disk
+    
     def save_settings(self):
         """Save current settings"""
         self.settings.setValue("window_position", self.pos())
@@ -540,19 +810,26 @@ class NameDropApp(QMainWindow):
             self.file_name_display.set_file_name(self.current_file_name, set(), set())
             return
         
-        # Get ignore characters
-        ignore_chars = set()
-        if self.ignore_common_check.isChecked():
-            ignore_text = self.ignore_chars_edit.text()
-            ignore_chars = set(char for char in ignore_text if char.strip())
+        # Get ignore characters - include all characters from the field
+        ignore_chars = self.get_ignore_chars()
         
-        # Find bad characters
+        # Find bad characters (excluding ignore_chars)
         bad_chars = self.char_utils.find_non_standard_ascii(self.current_file_name, ignore_chars)
+        
+        # Remove any ignore_chars from bad_chars to ensure they're never highlighted
+        bad_chars = bad_chars - ignore_chars
+        
+        # Update LED indicators
+        self.update_platform_leds(self.current_file_name)
         
         # Apply compatibility filter if platforms are selected
         if self.selected_platforms:
             self.apply_compatibility_filter()
         else:
+            # Add length restriction highlighting if needed
+            if self.selected_platforms:
+                length_bad_chars = self.get_length_restriction_chars(self.current_file_name)
+                bad_chars = bad_chars | length_bad_chars
             # Update display
             self.file_name_display.set_file_name(self.current_file_name, bad_chars, ignore_chars)
         
@@ -583,13 +860,64 @@ class NameDropApp(QMainWindow):
             self.replace_btn.setEnabled(False)
             self.edit_btn.setEnabled(False)
             
+    def update_display_for_ignore_chars_change(self):
+        """Update the display when ignore characters change (to avoid recursion)"""
+        if not self.current_file_name:
+            return
+        
+        # Get ignore characters - include all characters from the field
+        ignore_chars = self.get_ignore_chars()
+        
+        # Find bad characters (excluding ignore_chars)
+        bad_chars = self.char_utils.find_non_standard_ascii(self.current_file_name, ignore_chars)
+        
+        # Remove any ignore_chars from bad_chars to ensure they're never highlighted
+        bad_chars = bad_chars - ignore_chars
+        
+        # Update LED indicators
+        self.update_platform_leds(self.current_file_name)
+        
+        # Apply compatibility filter if platforms are selected
+        if self.selected_platforms:
+            self.apply_compatibility_filter()
+        else:
+            # Add length restriction highlighting if needed
+            if self.selected_platforms:
+                length_bad_chars = self.get_length_restriction_chars(self.current_file_name)
+                bad_chars = bad_chars | length_bad_chars
+            # Update display
+            self.file_name_display.set_file_name(self.current_file_name, bad_chars, ignore_chars)
+    
     def get_ignore_chars(self):
         """Get set of characters to ignore"""
         ignore_chars = set()
         if self.ignore_common_check.isChecked():
             ignore_text = self.ignore_chars_edit.text()
-            ignore_chars = set(char for char in ignore_text if char.strip())
+            # Include all characters from the field, including spaces if they're in the field
+            ignore_chars = set(char for char in ignore_text)
         return ignore_chars
+    
+    def get_length_restriction_chars(self, file_name: str):
+        """Get set of characters that exceed length restrictions for selected platforms"""
+        if not self.selected_platforms or not file_name:
+            return set()
+        
+        # Find the most restrictive max_filename_length from selected platforms
+        min_max_length = None
+        for platform_key in self.selected_platforms:
+            platform = PLATFORM_RESTRICTIONS.get(platform_key)
+            if platform:
+                max_len = platform.get("max_filename_length")
+                if max_len and (min_max_length is None or max_len < min_max_length):
+                    min_max_length = max_len
+        
+        # If filename exceeds the limit, highlight characters beyond the limit
+        if min_max_length and len(file_name) > min_max_length:
+            # Return set of characters at positions beyond the limit
+            # We'll highlight by position, not by character value
+            return set(file_name[min_max_length:])
+        
+        return set()
     
     def get_combined_restrictions(self, platforms):
         """Get combined restrictions from selected platforms"""
@@ -657,6 +985,32 @@ class NameDropApp(QMainWindow):
                 positions = [position_descriptions.get(p, p) for p in platform["excluded_positions"]]
                 lines.append(f"  • <b>Position restrictions:</b> {', '.join(positions)}")
             
+            # Reserved names
+            if platform.get("reserved_names"):
+                reserved_list = sorted(platform["reserved_names"])
+                reserved_display = ", ".join(f"<code>{name}</code>" for name in reserved_list[:10])  # Show first 10
+                if len(reserved_list) > 10:
+                    reserved_display += f" <i>(and {len(reserved_list) - 10} more)</i>"
+                lines.append(f"  • <b>Reserved names:</b> {reserved_display}")
+            
+            # Length restrictions
+            length_info = []
+            if platform.get("max_filename_length"):
+                length_info.append(f"Max filename: {platform['max_filename_length']} characters")
+            if platform.get("max_path_length"):
+                length_info.append(f"Max path: {platform['max_path_length']} characters")
+            if length_info:
+                lines.append(f"  • <b>Length restrictions:</b> {', '.join(length_info)}")
+            
+            # Additional restrictions
+            if platform.get("additional_restrictions"):
+                addl_desc = {
+                    "no_space_period_after_ext": "Cannot end with space/period before extension",
+                    "no_spaces_only": "Cannot consist solely of spaces"
+                }
+                addl_list = [addl_desc.get(r, r) for r in platform["additional_restrictions"]]
+                lines.append(f"  • <b>Additional restrictions:</b> {', '.join(addl_list)}")
+            
             lines.append(f"  • <i>{platform['description']}</i>")
             lines.append("")
         
@@ -686,6 +1040,32 @@ class NameDropApp(QMainWindow):
         if platform["excluded_positions"]:
             positions = [position_descriptions.get(p, p) for p in platform["excluded_positions"]]
             info += f"<b>Position restrictions:</b> {', '.join(positions)}<br>"
+        
+        # Reserved names
+        if platform.get("reserved_names"):
+            reserved_list = sorted(platform["reserved_names"])
+            reserved_display = ", ".join(f"<code>{name}</code>" for name in reserved_list[:10])
+            if len(reserved_list) > 10:
+                reserved_display += f" <i>(and {len(reserved_list) - 10} more)</i>"
+            info += f"<b>Reserved names:</b> {reserved_display}<br>"
+        
+        # Length restrictions
+        length_info = []
+        if platform.get("max_filename_length"):
+            length_info.append(f"Max filename: {platform['max_filename_length']} characters")
+        if platform.get("max_path_length"):
+            length_info.append(f"Max path: {platform['max_path_length']} characters")
+        if length_info:
+            info += f"<b>Length restrictions:</b> {', '.join(length_info)}<br>"
+        
+        # Additional restrictions
+        if platform.get("additional_restrictions"):
+            addl_desc = {
+                "no_space_period_after_ext": "Cannot end with space/period before extension",
+                "no_spaces_only": "Cannot consist solely of spaces"
+            }
+            addl_list = [addl_desc.get(r, r) for r in platform["additional_restrictions"]]
+            info += f"<b>Additional restrictions:</b> {', '.join(addl_list)}<br>"
         
         info += f"<br><i>{platform['description']}</i>"
         self.compatibility_info_label.setText(info)
@@ -768,19 +1148,24 @@ class NameDropApp(QMainWindow):
             return
         
         restrictions = self.get_combined_restrictions(self.selected_platforms)
+        ignore_chars = self.get_ignore_chars()  # Get characters to ignore
         filtered_name = self.current_file_name
         
         # Remove excluded characters (spaces are NOT excluded - they're allowed in filenames)
         # Only remove leading/trailing spaces based on position restrictions
+        # Don't remove characters that are in the ignore_chars list
         for char in restrictions["excluded_chars"]:
             # Never remove spaces - they're allowed characters, only position matters
-            if char != " ":
+            # Never remove characters that are in the ignore list
+            if char != " " and char not in ignore_chars:
                 filtered_name = filtered_name.replace(char, "")
         
         # Remove problematic characters (spaces are NOT problematic)
+        # Don't remove characters that are in the ignore_chars list
         for char in restrictions["problematic_chars"]:
             # Never remove spaces - they're allowed characters
-            if char != " ":
+            # Never remove characters that are in the ignore list
+            if char != " " and char not in ignore_chars:
                 filtered_name = filtered_name.replace(char, "")
         
         # Handle position restrictions - only remove spaces at specific positions
@@ -805,9 +1190,10 @@ class NameDropApp(QMainWindow):
         self.compatibility_filtered_name = filtered_name
         
         # Update display with filtered name
+        ignore_chars = self.get_ignore_chars()  # Get ignore chars once
+        
         if filtered_name != self.current_file_name:
             # Show what was removed
-            ignore_chars = self.get_ignore_chars()
             # Find characters that were removed
             removed_chars = set()
             for char in self.current_file_name:
@@ -817,17 +1203,258 @@ class NameDropApp(QMainWindow):
             # Show filtered name with removed characters highlighted
             bad_chars = self.char_utils.find_non_standard_ascii(filtered_name, ignore_chars)
             bad_chars.update(removed_chars)  # Also highlight removed chars if they appear in original
+            # Remove ignore_chars from bad_chars to ensure they're never highlighted
+            bad_chars = bad_chars - ignore_chars
             self.file_name_display.set_file_name(filtered_name, bad_chars, ignore_chars)
             self.rename_btn.setEnabled(True)
         else:
             # No changes needed
-            ignore_chars = self.get_ignore_chars()
             bad_chars = self.char_utils.find_non_standard_ascii(filtered_name, ignore_chars)
+            # Remove ignore_chars from bad_chars to ensure they're never highlighted
+            bad_chars = bad_chars - ignore_chars
             self.file_name_display.set_file_name(filtered_name, bad_chars, ignore_chars)
             self.rename_btn.setEnabled(False)
+        
+        # Update LED indicators with filtered name
+        self.update_platform_leds(filtered_name)
+    
+    def update_platform_leds(self, file_name: str = None):
+        """Update LED indicators based on filename compatibility with each platform"""
+        if file_name is None:
+            file_name = self.file_name_display.get_text() if hasattr(self.file_name_display, 'get_text') else self.current_file_name
+        
+        if not file_name:
+            # No filename, set all to gray
+            for led in self.platform_leds.values():
+                led.set_color("gray")
+            return
+        
+        ignore_chars = self.get_ignore_chars()
+        
+        # Check each platform
+        for platform_key, led in self.platform_leds.items():
+            platform = PLATFORM_RESTRICTIONS.get(platform_key)
+            if not platform:
+                led.set_color("gray")
+                continue
+            
+            # Check for invalid/excluded characters
+            excluded_chars = platform["excluded_chars"] - ignore_chars
+            problematic_chars = platform["problematic_chars"] - ignore_chars
+            excluded_positions = platform["excluded_positions"]
+            reserved_names = platform.get("reserved_names", set())
+            max_path_length = platform.get("max_path_length", None)
+            additional_restrictions = platform.get("additional_restrictions", [])
+            
+            has_excluded = any(char in file_name for char in excluded_chars)
+            has_problematic = any(char in file_name for char in problematic_chars)
+            has_position_issues = False
+            has_reserved_name = False
+            has_additional_restrictions = False
+            
+            # Check reserved names (case-insensitive for Windows/Cloud)
+            if reserved_names:
+                # Get filename without extension for reserved name check
+                if "." in file_name:
+                    name_without_ext = file_name.rsplit(".", 1)[0].upper()
+                else:
+                    name_without_ext = file_name.upper()
+                
+                # Check if name matches any reserved name (case-insensitive)
+                if name_without_ext in {name.upper() for name in reserved_names}:
+                    has_reserved_name = True
+            
+            # Check position restrictions
+            if "trailing_space" in excluded_positions and file_name.endswith(" "):
+                has_position_issues = True
+            if "trailing_period" in excluded_positions:
+                # Check for trailing periods (but not the extension separator)
+                if "." in file_name:
+                    name_part = file_name.rsplit(".", 1)[0]
+                    if name_part.endswith(".") or file_name.endswith("."):
+                        has_position_issues = True
+                elif file_name.endswith("."):
+                    has_position_issues = True
+            if "leading_space" in excluded_positions and file_name.startswith(" "):
+                has_position_issues = True
+            if "leading_period" in excluded_positions and file_name.startswith("."):
+                has_position_issues = True
+            
+            # Check additional restrictions
+            if "no_space_period_after_ext" in additional_restrictions:
+                # Filename cannot end with a space or period followed by an extension
+                if "." in file_name:
+                    name_part, ext_part = file_name.rsplit(".", 1)
+                    if name_part.endswith(" ") or name_part.endswith("."):
+                        has_additional_restrictions = True
+            
+            if "no_spaces_only" in additional_restrictions:
+                # Filename cannot consist solely of spaces
+                if file_name.strip() == "" and file_name:
+                    has_additional_restrictions = True
+            
+            # Check filename length restrictions
+            max_filename_length = platform.get("max_filename_length", None)
+            if max_filename_length and len(file_name) > max_filename_length:
+                has_additional_restrictions = True
+            
+            # Check path length (for full path, we'd need the parent path, but for filename we check if it's reasonable)
+            # Note: This is a simplified check - full path length would require parent directory
+            if max_path_length and len(file_name) > max_path_length - 50:  # Leave room for path
+                has_additional_restrictions = True
+            
+            # Check for non-standard ASCII (excluding ignore_chars)
+            bad_chars = self.char_utils.find_non_standard_ascii(file_name, ignore_chars) - ignore_chars
+            
+            # Determine LED color based on priority: Red > Purple > Orange > Yellow > Green
+            # Purple includes: position issues, reserved names, additional restrictions
+            if has_excluded:
+                led.set_color("red")  # Invalid chars
+            elif has_position_issues or has_reserved_name or has_additional_restrictions:
+                led.set_color("purple")  # Restrictions (position, reserved names, additional)
+            elif has_problematic:
+                led.set_color("orange")  # Problematic
+            elif bad_chars:
+                led.set_color("yellow")  # Non-standard chars
+            else:
+                led.set_color("green")  # OK
+    
+    def generate_random_filename(self):
+        """Generate a random filename with various problematic characters for testing"""
+        # Characters to include in random filename
+        excluded_chars = list('<>:"|?*\\/')
+        problematic_chars = list('!@#$%^&()[]{};,=+')
+        non_ascii_chars = ['é', 'ñ', 'ü', 'à', 'ç', 'ö', 'ä', 'ß', 'ø', 'å', 'æ', 'œ', '€', '£', '¥']
+        safe_chars = list(string.ascii_letters + string.digits + '._- ')
+        
+        # Build random filename parts
+        parts = []
+        
+        # Sometimes add leading space or period
+        if random.random() < 0.2:
+            parts.append(' ' if random.random() < 0.5 else '.')
+        
+        # Add some safe characters
+        parts.append(''.join(random.choices(safe_chars, k=random.randint(3, 8))))
+        
+        # Add some excluded characters
+        if random.random() < 0.7:
+            parts.append(''.join(random.choices(excluded_chars, k=random.randint(1, 3))))
+        
+        # Add more safe characters
+        parts.append(''.join(random.choices(safe_chars, k=random.randint(2, 6))))
+        
+        # Add problematic characters
+        if random.random() < 0.6:
+            parts.append(''.join(random.choices(problematic_chars, k=random.randint(1, 3))))
+        
+        # Add non-ASCII characters
+        if random.random() < 0.5:
+            parts.append(''.join(random.choices(non_ascii_chars, k=random.randint(1, 3))))
+        
+        # Add more safe characters
+        parts.append(''.join(random.choices(safe_chars, k=random.randint(2, 5))))
+        
+        # Sometimes add trailing space or period
+        if random.random() < 0.2:
+            parts.append(' ' if random.random() < 0.5 else '.')
+        
+        # Combine parts
+        random_name = ''.join(parts)
+        
+        # Sometimes add an extension
+        if random.random() < 0.7:
+            extensions = ['txt', 'pdf', 'doc', 'jpg', 'png', 'mp3', 'zip']
+            random_name += '.' + random.choice(extensions)
+        
+        # Sometimes make it too long
+        if random.random() < 0.3:
+            random_name += ''.join(random.choices(string.ascii_letters, k=random.randint(200, 260)))
+        
+        # Update the display with the random filename
+        ignore_chars = self.get_ignore_chars()
+        bad_chars = self.char_utils.find_non_standard_ascii(random_name, ignore_chars) - ignore_chars
+        
+        # Also add all excluded and problematic characters that appear in the random filename
+        # This ensures all problematic characters are highlighted, not just non-standard ASCII
+        all_excluded_chars = set('<>:"|?*\\/')
+        all_problematic_chars = set('!@#$%^&()[]{};,=+')
+        
+        # Find which excluded/problematic chars are actually in the random_name
+        for char in random_name:
+            if char in all_excluded_chars or char in all_problematic_chars:
+                bad_chars.add(char)
+        
+        # Remove ignore_chars from bad_chars
+        bad_chars = bad_chars - ignore_chars
+        
+        # Add length restriction highlighting if platforms are selected
+        if self.selected_platforms:
+            length_bad_chars = self.get_length_restriction_chars(random_name)
+            bad_chars = bad_chars | length_bad_chars
+        
+        self.file_name_display.set_file_name(random_name, bad_chars, ignore_chars)
+        
+        # Update LED indicators
+        self.update_platform_leds(random_name)
+        
+        # Enable rename button since we have a new name
+        self.rename_btn.setEnabled(True)
+        
+        # Clear current file path so this is just a test name
+        self.current_file_path = None
+        self.current_file_name = random_name
+    
+    def on_filename_edited(self, new_text: str):
+        """Handle when user edits the filename in the display"""
+        # Update the rename button state based on whether text has changed
+        if new_text != self.current_file_name:
+            self.rename_btn.setEnabled(True)
+        else:
+            # Check if compatibility filter would enable it
+            if self.selected_platforms and self.compatibility_filtered_name and self.compatibility_filtered_name != self.current_file_name:
+                self.rename_btn.setEnabled(True)
+            else:
+                self.rename_btn.setEnabled(False)
+        
+        # Update LED indicators
+        self.update_platform_leds(new_text)
+    
+    def rename_current_display(self):
+        """Perform rename using the current text in the display (either edited or filtered)"""
+        if not self.current_file_path:
+            return
+        
+        # Get the current text from the display
+        new_name = self.file_name_display.get_text()
+        
+        if not new_name or new_name == self.current_file_name:
+            if self.selected_platforms and self.compatibility_filtered_name:
+                # Try using compatibility filtered name
+                new_name = self.compatibility_filtered_name
+                if new_name == self.current_file_name:
+                    QMessageBox.information(self, "No Changes", "The filename is already compatible with the selected platforms.")
+                    return
+            else:
+                QMessageBox.information(self, "No Changes", "The filename hasn't been changed.")
+                return
+        
+        # Show preview if prompting is enabled
+        if self.prompt_check.isChecked():
+            dialog = RenamePreviewDialog(self.current_file_name, new_name, self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+        
+        # Determine the operation description
+        if new_name == self.compatibility_filtered_name:
+            operation = "Platform compatibility filter"
+        else:
+            operation = "Manual edit"
+        
+        self.perform_rename(new_name, operation)
     
     def rename_with_compatibility_filter(self):
-        """Perform rename using the compatibility filtered name"""
+        """Perform rename using the compatibility filtered name (legacy method)"""
         if not self.compatibility_filtered_name or not self.current_file_path:
             return
         
@@ -854,6 +1481,9 @@ class NameDropApp(QMainWindow):
             issues.append("Filename starts with a period")
         if file_name.endswith('.'):
             issues.append("Filename ends with a period")
+        # Check for reserved directory names
+        if file_name == "." or file_name == "..":
+            issues.append(f"Filename '{file_name}' is a reserved directory name")
         return issues
         
     def perform_rename(self, new_name: str, operation_description: str):
