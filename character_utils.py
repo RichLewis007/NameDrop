@@ -1,5 +1,8 @@
 """
 Character utilities for detecting and fixing non-standard ASCII characters in file names
+
+Author: Rich Lewis
+GitHub: @RichLewis007
 """
 
 import unicodedata

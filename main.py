@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 NameDrop - A PySide6 application to rename files/folders with non-standard ASCII characters
+
+Author: Rich Lewis
+GitHub: @RichLewis007
 """
 
 import sys

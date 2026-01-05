@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Development Script**: Added `run.sh` bash script with interactive menu for common development tasks
   - Menu options: Run, Check (lint), Format, Sync dependencies, Install dependencies, Test, Type check (mypy), Clean cache, Project info, Quit
-  - Uses `~/utils/bash-ui.sh` for menu interface with fzf/gum fallback support
+  - Self-contained script with embedded UI functions (no external dependencies)
+  - Uses fzf/gum for menu interface with fallback to basic numbered menu
   - Auto-checks for PySide6 dependency before running app
 - **Platform Compatibility System**: Comprehensive platform compatibility checking and filtering
   - "Make compatible with:" section with platform buttons (Everything, Windows, macOS, Linux, Cloud Drives)

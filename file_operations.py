@@ -1,5 +1,8 @@
 """
 Safe file operations for renaming files and folders
+
+Author: Rich Lewis
+GitHub: @RichLewis007
 """
 
 import os
