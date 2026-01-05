@@ -5,8 +5,13 @@ description = "A PySide6 application to rename files/folders with non-standard A
 readme = "README.md"
 requires-python = ">=3.12.12,<3.13" # because the maximum Python version that supports PySide6 6.7.3 is Python 3.12.x
 authors = [
-    {name = "Rich Lewis"}
+    {name = "Rich Lewis", GitHub = "@RichLewis007"}
 ]
 dependencies = [
   "PySide6==6.7.3", # The max version MBP macOS supports
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
 ]

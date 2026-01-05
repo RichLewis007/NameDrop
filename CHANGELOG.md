@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Filenames ending with space or period after extension (Windows restriction)
   - Filenames consisting solely of spaces (Windows restriction)
   - All additional restrictions trigger purple LED (Restrictions)
+- **Development Script - Remove Virtual Environment**: Added "Remove virtual environment" menu item to `run.sh`
+  - Shows which virtual environment directories will be deleted (`.venv`, `venv`, `env`, `.env`)
+  - Displays directory sizes before deletion
+  - Prompts for confirmation (y/N, defaults to No)
+  - Optionally recreates the virtual environment after deletion
+
+### Changed
+
+- **Development Script - Clean Cache**: Enhanced `clean_cache` function in `run.sh`
+  - Now displays all cache files and directories that will be deleted before deletion
+  - Shows counts for each type (__pycache__ directories, *.pyc files, *.pyo files)
+  - Lists all files/directories that will be deleted
+  - Prompts for user confirmation (y/N, defaults to No) before deleting
 
 ## [0.2.0] - 2024-12-13
 

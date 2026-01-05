@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, QSettings, QPoint, QSize, Signal, QStandardPaths
+from PySide6.QtCore import Qt, QSettings, QPoint, QSize, QRect, Signal, QStandardPaths
 from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
@@ -848,8 +848,29 @@ class NameDropApp(QMainWindow):
         self.move(pos)
         self.resize(size)
 
-        # Move to saved screen if available
+        # Validate and clamp window position to ensure it's within screen bounds
         screens = QApplication.screens()
+        if screens:
+            window_geometry = self.frameGeometry()
+            # Check if window is within any screen
+            is_visible = False
+            for screen_obj in screens:
+                if screen_obj.geometry().intersects(window_geometry):
+                    is_visible = True
+                    break
+            
+            # If window is outside all screens, clamp it to the primary screen
+            if not is_visible and screens:
+                primary_screen = screens[0]
+                screen_rect = primary_screen.geometry()
+                
+                # Clamp position to ensure window is visible
+                x = max(screen_rect.left(), min(pos.x(), screen_rect.right() - window_geometry.width()))
+                y = max(screen_rect.top(), min(pos.y(), screen_rect.bottom() - window_geometry.height()))
+                
+                self.move(QPoint(x, y))
+
+        # Move to saved screen if available
         if 0 <= screen < len(screens):
             screen_geometry = screens[screen].geometry()
             window_geometry = self.frameGeometry()
@@ -880,16 +901,42 @@ class NameDropApp(QMainWindow):
 
     def save_settings(self):
         """Save current settings"""
-        self.settings.setValue("window_position", self.pos())
-        self.settings.setValue("window_size", self.size())
-
-        # Find which screen the window is on
-        screen_num = 0
+        pos = self.pos()
+        size = self.size()
+        window_geometry = self.frameGeometry()
+        
+        # Validate and clamp position before saving to prevent invalid positions
         screens = QApplication.screens()
-        for i, screen in enumerate(screens):
-            if screen.geometry().contains(self.frameGeometry().center()):
-                screen_num = i
-                break
+        if screens:
+            # Check if window center is within any screen
+            window_center = window_geometry.center()
+            is_valid = False
+            for screen in screens:
+                if screen.geometry().contains(window_center):
+                    is_valid = True
+                    break
+            
+            # If window is outside all screens, clamp position to primary screen
+            if not is_valid and screens:
+                primary_screen = screens[0]
+                screen_rect = primary_screen.geometry()
+                
+                # Clamp position to ensure window is visible
+                x = max(screen_rect.left(), min(pos.x(), screen_rect.right() - window_geometry.width()))
+                y = max(screen_rect.top(), min(pos.y(), screen_rect.bottom() - window_geometry.height()))
+                pos = QPoint(x, y)
+        
+        self.settings.setValue("window_position", pos)
+        self.settings.setValue("window_size", size)
+
+        # Find which screen the window is on (using current geometry)
+        screen_num = 0
+        if screens:
+            current_geometry = self.frameGeometry()
+            for i, screen in enumerate(screens):
+                if screen.geometry().contains(current_geometry.center()):
+                    screen_num = i
+                    break
         self.settings.setValue("screen", screen_num)
 
         self.settings.setValue("prompt_before_rename", self.prompt_check.isChecked())
