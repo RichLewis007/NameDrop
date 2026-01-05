@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - **CHANGELOG.md**: Added comprehensive changelog following Keep a Changelog format
 - **Reserved Names Detection**: LED indicators now check for Windows reserved names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
   - Case-insensitive checking (e.g., "con.txt", "CON", "Con" all detected)
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2024-12-13
 
 ### Added
+
 - **Development Script**: Added `run.sh` bash script with interactive menu for common development tasks
   - Menu options: Run, Check (lint), Format, Sync dependencies, Install dependencies, Test, Type check (mypy), Clean cache, Project info, Quit
   - Uses `~/utils/bash-ui.sh` for menu interface with fzf/gum fallback support
@@ -54,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Includes character restrictions, position restrictions, reserved names, and additional limitations
 
 ### Changed
+
 - **Dependency Management**: Migrated from `requirements.txt` to `uv`-only dependency management
   - All dependencies now defined in `pyproject.toml`
   - PySide6 version constrained to `<6.10.0` for macOS 12.0 compatibility
@@ -68,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Cursor position preservation during highlighting updates
 
 ### Fixed
+
 - **Space Character Handling**: Fixed issue where spaces were incorrectly being removed
   - Spaces are now properly recognized as allowed characters
   - Only leading/trailing spaces are restricted based on platform rules
@@ -83,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2024-12-13
 
 ### Added
+
 - Initial release of NameDrop
 - Drag and drop file/folder interface
 - Visual highlighting of non-standard ASCII characters
@@ -101,4 +106,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Checkbox states
   - Custom allowed characters list
 - Always-on-top window option
-
