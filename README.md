@@ -28,7 +28,26 @@ A PySide6 application to help rename files and folders with non-standard ASCII c
 
 ## Installation
 
-1. Install Python 3.8 or higher
+1. Install Python >=3.12.12,<3.13 (required for PySide6 6.7.3 compatibility)
+
+   Install the latest 3.12.x patch version using uv:
+
+   ```bash
+   uv python install 3.12
+   ```
+
+   If you already have 3.12.x installed and want to upgrade to the newest patch:
+
+   ```bash
+   uv python upgrade 3.12
+   ```
+
+   To pin the project to use Python 3.12 (latest patch available):
+
+   ```bash
+   uv python pin 3.12
+   ```
+
 2. Install dependencies using uv:
 
 ```bash
