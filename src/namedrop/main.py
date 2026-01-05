@@ -29,7 +29,18 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, QSettings, QPoint, QSize, QRect, Signal, QStandardPaths
+from PySide6.QtUiTools import QUiLoader
+from PySide6.QtCore import (
+    Qt,
+    QSettings,
+    QPoint,
+    QSize,
+    QRect,
+    Signal,
+    QStandardPaths,
+    QFile,
+    QIODevice,
+)
 from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
@@ -42,8 +53,8 @@ from PySide6.QtGui import (
     QPen,
 )
 
-from file_operations import FileOperations
-from character_utils import CharacterUtils
+from .file_operations import FileOperations
+from .character_utils import CharacterUtils
 
 
 # Platform compatibility data
@@ -559,7 +570,349 @@ class NameDropApp(QMainWindow):
         self.load_settings()
 
     def init_ui(self):
-        """Initialize the user interface"""
+        """Initialize the user interface from UI file"""
+        # Load UI file using best practices for PySide6
+        ui_file_path = Path(__file__).parent / "ui" / "main.ui"
+        if ui_file_path.exists():
+            loader = QUiLoader()
+            ui_file = QFile(str(ui_file_path))
+
+            if not ui_file.open(QIODevice.ReadOnly):
+                print(f"Error: Cannot open UI file: {ui_file.errorString()}")
+                self._init_ui_programmatic()
+                return
+
+            try:
+                # Load the UI file - QUiLoader will create a QMainWindow from the UI file
+                # We need to extract the central widget since we're already a QMainWindow
+                loaded_ui = loader.load(ui_file, None)
+                ui_file.close()
+
+                if loaded_ui and hasattr(loaded_ui, "centralwidget"):
+                    # Store reference to prevent garbage collection
+                    self.ui = loaded_ui
+                    # Extract the central widget from the loaded QMainWindow
+                    central_widget = loaded_ui.centralwidget
+                    # Reparent to our main window
+                    central_widget.setParent(self)
+                    self.setCentralWidget(central_widget)
+                    layout = central_widget.layout()
+                    # Hide the loaded QMainWindow - we only need its central widget
+                    loaded_ui.hide()
+                else:
+                    raise Exception("Failed to load UI file or missing centralwidget")
+
+                # Replace drag_drop widget with custom DragDropWidget
+                drag_drop_index = None
+                for i in range(layout.count()):
+                    item = layout.itemAt(i)
+                    if (
+                        item
+                        and item.widget()
+                        and item.widget().objectName() == "drag_drop"
+                    ):
+                        drag_drop_index = i
+                        old_widget = item.widget()
+                        break
+
+                if drag_drop_index is not None:
+                    layout.removeWidget(old_widget)
+                    old_widget.deleteLater()
+                    self.drag_drop = DragDropWidget()
+                    self.drag_drop.files_dropped.connect(self.on_files_dropped)
+                    layout.insertWidget(drag_drop_index, self.drag_drop)
+                else:
+                    # Fallback: create drag_drop if not found
+                    self.drag_drop = DragDropWidget()
+                    self.drag_drop.files_dropped.connect(self.on_files_dropped)
+                    layout.insertWidget(1, self.drag_drop)
+
+                # Replace file_name_display with custom FileNameDisplay
+                file_name_display = self.ui.findChild(QTextEdit, "file_name_display")
+                if file_name_display:
+                    file_name_index = layout.indexOf(file_name_display)
+                    layout.removeWidget(file_name_display)
+                    file_name_display.deleteLater()
+                    self.file_name_display = FileNameDisplay()
+                    self.file_name_display.set_app_reference(self)
+                    self.file_name_display.text_edited.connect(self.on_filename_edited)
+                    layout.insertWidget(file_name_index, self.file_name_display)
+                else:
+                    self.file_name_display = FileNameDisplay()
+                    self.file_name_display.set_app_reference(self)
+                    self.file_name_display.text_edited.connect(self.on_filename_edited)
+                    layout.addWidget(self.file_name_display)
+
+                # Get button references
+                self.random_btn = self.ui.findChild(QPushButton, "random_btn")
+                self.rename_btn = self.ui.findChild(QPushButton, "rename_btn")
+
+                # Connect button signals
+                if self.random_btn:
+                    self.random_btn.clicked.connect(self.generate_random_filename)
+                if self.rename_btn:
+                    self.rename_btn.setEnabled(False)
+                    self.rename_btn.clicked.connect(self.rename_current_display)
+
+                # Replace LED widgets with LEDIndicator widgets
+                self._replace_led_widgets()
+
+            except Exception as e:
+                print(f"Error loading UI file: {e}")
+                # Fallback to programmatic UI
+                self._init_ui_programmatic()
+                return  # Don't add missing sections, they're already in the programmatic UI
+        else:
+            # Fallback to programmatic UI if file doesn't exist
+            self._init_ui_programmatic()
+            return  # Don't add missing sections, they're already in the programmatic UI
+
+        # Add missing sections that aren't in the UI file (only if UI file loaded successfully)
+        if hasattr(self, "ui"):
+            self._add_missing_sections()
+
+        self.setWindowTitle("NameDrop")
+        self.resize(800, 700)
+
+    def _replace_led_widgets(self):
+        """Replace QWidget LEDs with LEDIndicator widgets"""
+        detection_group = self.ui.findChild(QGroupBox, "detection_group")
+        if not detection_group:
+            return
+
+        detection_layout = detection_group.layout()
+        platforms_layout = detection_layout.itemAt(0).layout()
+
+        # Map of platform keys to UI widget names
+        platform_map = {
+            "Windows": ("windows_led", "windows_label"),
+            "macOS": ("macos_led", "macos_label"),
+            "Linux": ("linux_led", "linux_label"),
+            "Cloud": ("cloud_led", "cloud_label"),
+            "FAT32": ("fat32_led", "fat32_label"),
+        }
+
+        self.platform_leds = {}
+        for platform_key, (led_name, label_name) in platform_map.items():
+            led_widget = self.ui.findChild(QWidget, led_name)
+            if led_widget:
+                # Find parent layout
+                parent = led_widget.parent()
+                if parent:
+                    layout = None
+                    for i in range(platforms_layout.count()):
+                        item = platforms_layout.itemAt(i)
+                        if item and item.layout():
+                            for j in range(item.layout().count()):
+                                sub_item = item.layout().itemAt(j)
+                                if sub_item and sub_item.widget() == led_widget:
+                                    layout = item.layout()
+                                    break
+                            if layout:
+                                break
+
+                    if layout:
+                        index = layout.indexOf(led_widget)
+                        layout.removeWidget(led_widget)
+                        led_widget.deleteLater()
+                        led = LEDIndicator()
+                        led.set_color("gray")
+                        layout.insertWidget(index, led)
+                        self.platform_leds[platform_key] = led
+
+        # Replace legend LEDs
+        legend_layout = detection_layout.itemAt(1).layout()
+        legend_leds = {
+            "green_led": "green",
+            "yellow_led": "yellow",
+            "red_led": "red",
+            "orange_led": "orange",
+            "purple_led": "purple",
+        }
+
+        for led_name, color in legend_leds.items():
+            led_widget = self.ui.findChild(QWidget, led_name)
+            if led_widget:
+                # Find parent layout
+                for i in range(legend_layout.count()):
+                    item = legend_layout.itemAt(i)
+                    if item and item.layout():
+                        for j in range(item.layout().count()):
+                            sub_item = item.layout().itemAt(j)
+                            if sub_item and sub_item.widget() == led_widget:
+                                layout = item.layout()
+                                index = layout.indexOf(led_widget)
+                                layout.removeWidget(led_widget)
+                                led_widget.deleteLater()
+                                led = LEDIndicator()
+                                led.set_color(color)
+                                led.setFixedSize(16, 16)
+                                layout.insertWidget(index, led)
+                                break
+
+    def _add_missing_sections(self):
+        """Add sections that are missing from the UI file"""
+        if not hasattr(self, "ui"):
+            return
+        central_widget = self.ui.centralwidget
+        if not central_widget:
+            return
+        layout = central_widget.layout()
+        if not layout:
+            return
+
+        # Find detection_group to insert after it
+        detection_group = self.ui.findChild(QGroupBox, "detection_group")
+        detection_index = layout.indexOf(detection_group) if detection_group else -1
+
+        # Platform compatibility section
+        compatibility_group = QGroupBox("Make compatible with:")
+        compatibility_layout = QVBoxLayout()
+
+        # Platform buttons (horizontal)
+        buttons_layout = QHBoxLayout()
+        self.platform_buttons = {}
+        platform_keys = ["Everything", "Windows", "macOS", "Linux", "Cloud", "FAT32"]
+
+        for platform_key in platform_keys:
+            btn = PlatformButton(
+                platform_key, PLATFORM_RESTRICTIONS[platform_key]["name"]
+            )
+            btn.setCheckable(True)
+            btn.setStyleSheet("""
+                QPushButton {
+                    padding: 8px 15px;
+                    border: 2px solid #ccc;
+                    border-radius: 5px;
+                    background-color: #f5f5f5;
+                }
+                QPushButton:hover {
+                    background-color: #e3f2fd;
+                    border-color: #0066cc;
+                }
+                QPushButton:checked {
+                    background-color: #4CAF50;
+                    color: white;
+                    border-color: #45a049;
+                }
+            """)
+            btn.clicked.connect(
+                lambda checked, key=platform_key: self.on_platform_button_clicked(
+                    key, checked
+                )
+            )
+            btn.hover_entered.connect(self.on_platform_button_hover)
+            btn.hover_left.connect(self.on_platform_button_leave)
+            buttons_layout.addWidget(btn)
+            self.platform_buttons[platform_key] = btn
+
+        buttons_layout.addStretch()
+        compatibility_layout.addLayout(buttons_layout)
+
+        # Information display area
+        self.compatibility_info_label = QLabel(
+            "Hover over a platform button to see restrictions, or click to apply filters."
+        )
+        self.compatibility_info_label.setWordWrap(True)
+        self.compatibility_info_label.setTextFormat(Qt.RichText)
+        self.compatibility_info_label.setStyleSheet("""
+            QLabel {
+                padding: 10px;
+                background-color: #f9f9f9;
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                min-height: 80px;
+            }
+        """)
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(self.compatibility_info_label)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMinimumHeight(100)
+        scroll_area.setMaximumHeight(200)
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                background-color: #f9f9f9;
+            }
+        """)
+        compatibility_layout.addWidget(scroll_area)
+
+        compatibility_group.setLayout(compatibility_layout)
+        insert_index = detection_index + 1 if detection_index >= 0 else layout.count()
+        layout.insertWidget(insert_index, compatibility_group)
+
+        # Ignore common characters group
+        ignore_group = QGroupBox("Ignore Common Special Characters")
+        ignore_layout = QVBoxLayout()
+        self.ignore_common_check = QCheckBox("Ignore common special characters")
+        self.ignore_common_check.setChecked(True)
+        self.ignore_common_check.stateChanged.connect(self.on_file_selected)
+        ignore_layout.addWidget(self.ignore_common_check)
+
+        self.ignore_chars_edit = QLineEdit(self.char_utils.get_common_allowed_chars())
+        self.ignore_chars_edit.setPlaceholderText(
+            "Characters to ignore (separated by spaces)"
+        )
+        self.ignore_chars_edit.textChanged.connect(self.save_allowed_chars)
+        self.ignore_chars_edit.textChanged.connect(self.on_file_selected)
+        ignore_layout.addWidget(QLabel("Allowed characters:"))
+        ignore_layout.addWidget(self.ignore_chars_edit)
+        ignore_group.setLayout(ignore_layout)
+        layout.insertWidget(insert_index + 1, ignore_group)
+
+        # Options group
+        options_group = QGroupBox("Options")
+        options_layout = QVBoxLayout()
+
+        self.prompt_check = QCheckBox("Prompt before renaming")
+        self.prompt_check.setChecked(True)
+        options_layout.addWidget(self.prompt_check)
+
+        self.backup_check = QCheckBox("Always make backup first")
+        self.backup_check.setChecked(True)
+        options_layout.addWidget(self.backup_check)
+
+        options_group.setLayout(options_layout)
+        layout.insertWidget(insert_index + 2, options_group)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        self.ignore_btn = QPushButton("Ignore File")
+        self.ignore_btn.clicked.connect(self.ignore_file)
+        self.ignore_btn.setEnabled(False)
+        button_layout.addWidget(self.ignore_btn)
+
+        self.auto_rename_btn = QPushButton("Auto Rename")
+        self.auto_rename_btn.clicked.connect(self.auto_rename)
+        self.auto_rename_btn.setEnabled(False)
+        button_layout.addWidget(self.auto_rename_btn)
+
+        self.remove_btn = QPushButton("REMOVE bad characters")
+        self.remove_btn.clicked.connect(self.remove_bad_chars)
+        self.remove_btn.setEnabled(False)
+        button_layout.addWidget(self.remove_btn)
+
+        self.replace_btn = QPushButton("REPLACE bad characters")
+        self.replace_btn.clicked.connect(self.replace_bad_chars)
+        self.replace_btn.setEnabled(False)
+        button_layout.addWidget(self.replace_btn)
+
+        self.edit_btn = QPushButton("Edit Name")
+        self.edit_btn.clicked.connect(self.edit_name)
+        self.edit_btn.setEnabled(False)
+        button_layout.addWidget(self.edit_btn)
+
+        layout.insertLayout(insert_index + 3, button_layout)
+
+        # Status label
+        self.status_label = QLabel("Ready - Drop a file or folder")
+        self.status_label.setStyleSheet("padding: 5px; background-color: #e3f2fd;")
+        layout.insertWidget(insert_index + 4, self.status_label)
+
+    def _init_ui_programmatic(self):
+        """Fallback: Initialize UI programmatically if UI file can't be loaded"""
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
@@ -845,37 +1198,42 @@ class NameDropApp(QMainWindow):
         size = self.settings.value("window_size", QSize(800, 700))
         screen = self.settings.value("screen", 0, type=int)
 
+        # Validate and clamp window position BEFORE moving to prevent Qt warnings
+        screens = QApplication.screens()
+        if screens:
+            primary_screen = screens[0]
+            screen_rect = primary_screen.geometry()
+
+            # Clamp position to ensure window top-left corner is within screen bounds
+            # This prevents Qt warnings about positions outside known screens
+            x = max(
+                screen_rect.left(), min(pos.x(), screen_rect.right() - size.width())
+            )
+            y = max(
+                screen_rect.top(), min(pos.y(), screen_rect.bottom() - size.height())
+            )
+            pos = QPoint(x, y)
+
         self.move(pos)
         self.resize(size)
 
-        # Validate and clamp window position to ensure it's within screen bounds
-        screens = QApplication.screens()
-        if screens:
-            window_geometry = self.frameGeometry()
-            # Check if window is within any screen
-            is_visible = False
-            for screen_obj in screens:
-                if screen_obj.geometry().intersects(window_geometry):
-                    is_visible = True
-                    break
-            
-            # If window is outside all screens, clamp it to the primary screen
-            if not is_visible and screens:
-                primary_screen = screens[0]
-                screen_rect = primary_screen.geometry()
-                
-                # Clamp position to ensure window is visible
-                x = max(screen_rect.left(), min(pos.x(), screen_rect.right() - window_geometry.width()))
-                y = max(screen_rect.top(), min(pos.y(), screen_rect.bottom() - window_geometry.height()))
-                
-                self.move(QPoint(x, y))
-
         # Move to saved screen if available
-        if 0 <= screen < len(screens):
+        if screens and 0 <= screen < len(screens):
             screen_geometry = screens[screen].geometry()
             window_geometry = self.frameGeometry()
             window_geometry.moveCenter(screen_geometry.center())
-            self.move(window_geometry.topLeft())
+            new_pos = window_geometry.topLeft()
+
+            # Validate the new position before moving
+            x = max(
+                screen_geometry.left(),
+                min(new_pos.x(), screen_geometry.right() - window_geometry.width()),
+            )
+            y = max(
+                screen_geometry.top(),
+                min(new_pos.y(), screen_geometry.bottom() - window_geometry.height()),
+            )
+            self.move(QPoint(x, y))
 
         # Checkbox states
         self.prompt_check.setChecked(
@@ -904,7 +1262,7 @@ class NameDropApp(QMainWindow):
         pos = self.pos()
         size = self.size()
         window_geometry = self.frameGeometry()
-        
+
         # Validate and clamp position before saving to prevent invalid positions
         screens = QApplication.screens()
         if screens:
@@ -915,17 +1273,23 @@ class NameDropApp(QMainWindow):
                 if screen.geometry().contains(window_center):
                     is_valid = True
                     break
-            
+
             # If window is outside all screens, clamp position to primary screen
             if not is_valid and screens:
                 primary_screen = screens[0]
                 screen_rect = primary_screen.geometry()
-                
+
                 # Clamp position to ensure window is visible
-                x = max(screen_rect.left(), min(pos.x(), screen_rect.right() - window_geometry.width()))
-                y = max(screen_rect.top(), min(pos.y(), screen_rect.bottom() - window_geometry.height()))
+                x = max(
+                    screen_rect.left(),
+                    min(pos.x(), screen_rect.right() - window_geometry.width()),
+                )
+                y = max(
+                    screen_rect.top(),
+                    min(pos.y(), screen_rect.bottom() - window_geometry.height()),
+                )
                 pos = QPoint(x, y)
-        
+
         self.settings.setValue("window_position", pos)
         self.settings.setValue("window_size", size)
 

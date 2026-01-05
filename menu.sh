@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Development menu script for NameDrop
+# Development menu Text User Interface (TUI) script for NameDrop
 #
 # Author: Rich Lewis
 # GitHub: @RichLewis007
@@ -25,6 +25,10 @@ log_warn() {
 
 log_ok() {
   echo "✓ $*" >&2
+}
+
+log_cmd() {
+  echo "▶  Command: $*" >&2
 }
 
 # Confirm function - prompts user for yes/no
@@ -218,15 +222,18 @@ cd "$SCRIPT_DIR"
 # Menu handler functions
 run_app() {
   log_info "Running NameDrop application..."
-  uv run python main.py
+  log_cmd "uv run namedrop"
+  uv run namedrop
 }
 
 check_code() {
   log_info "Checking code with ruff..."
   if command -v ruff >/dev/null 2>&1; then
+    log_cmd "ruff check ."
     run_with_spinner "Running ruff check" ruff check . || true
   else
     log_warn "ruff not found. Running via uv..."
+    log_cmd "uv run ruff check ."
     run_with_spinner "Running ruff check" uv run ruff check . || true
   fi
 }
@@ -234,9 +241,11 @@ check_code() {
 check_format() {
   log_info "Checking code formatting (no changes)..."
   if command -v ruff >/dev/null 2>&1; then
+    log_cmd "ruff format --check ."
     run_with_spinner "Running ruff format check" ruff format --check . || true
   else
     log_warn "ruff not found. Running via uv..."
+    log_cmd "uv run ruff format --check ."
     run_with_spinner "Running ruff format check" uv run ruff format --check . || true
   fi
 }
@@ -244,10 +253,12 @@ check_format() {
 format_code() {
   log_info "Formatting code with ruff..."
   if command -v ruff >/dev/null 2>&1; then
+    log_cmd "ruff format ."
     run_with_spinner "Running ruff format" ruff format .
     log_ok "Code formatted successfully"
   else
     log_warn "ruff not found. Running via uv..."
+    log_cmd "uv run ruff format ."
     run_with_spinner "Running ruff format" uv run ruff format .
     log_ok "Code formatted successfully"
   fi
@@ -255,19 +266,24 @@ format_code() {
 
 sync_deps() {
   log_info "Syncing dependencies with uv..."
+  log_cmd "uv sync"
   run_with_spinner "Running uv sync" uv sync
 }
 
 run_tests() {
   log_info "Running tests..."
   if command -v pytest >/dev/null 2>&1; then
+    log_cmd "pytest -v"
     run_with_spinner "Running pytest" pytest -v || true
   elif uv run pytest --version >/dev/null 2>&1; then
+    log_cmd "uv run pytest -v"
     run_with_spinner "Running pytest via uv" uv run pytest -v || true
   else
     log_warn "No tests found or pytest not available"
     if confirm "Would you like to install pytest? [y/N] "; then
+      log_cmd "uv add --dev pytest"
       run_with_spinner "Installing pytest" uv add --dev pytest
+      log_cmd "uv run pytest -v"
       run_with_spinner "Running pytest" uv run pytest -v || true
     fi
   fi
@@ -339,12 +355,15 @@ clean_cache() {
   # Delete the items
   log_info "Deleting cache files and directories..."
   if [[ -n "$cache_dirs" ]]; then
+    log_cmd "rm -rf <cache_dirs>"
     echo "$cache_dirs" | xargs rm -rf 2>/dev/null || true
   fi
   if [[ -n "$pyc_files" ]]; then
+    log_cmd "rm -f <*.pyc files>"
     echo "$pyc_files" | xargs rm -f 2>/dev/null || true
   fi
   if [[ -n "$pyo_files" ]]; then
+    log_cmd "rm -f <*.pyo files>"
     echo "$pyo_files" | xargs rm -f 2>/dev/null || true
   fi
   
@@ -401,6 +420,7 @@ remove_venv() {
   # Delete the directories
   log_info "Removing virtual environment directories..."
   for venv in "${venv_paths[@]}"; do
+    log_cmd "rm -rf $venv"
     if rm -rf "$venv" 2>/dev/null; then
       log_ok "Removed $venv"
     else
@@ -411,6 +431,7 @@ remove_venv() {
   echo ""
   if confirm "Would you like to recreate the virtual environment now? [y/N] "; then
     log_info "Recreating virtual environment..."
+    log_cmd "uv sync"
     run_with_spinner "Running uv sync" uv sync
     log_ok "Virtual environment recreated"
   else
@@ -420,6 +441,9 @@ remove_venv() {
 
 show_project_info() {
   log_info "Project Information:"
+  log_cmd "uv python find"
+  log_cmd "uv --version"
+  log_cmd "grep '^version' pyproject.toml"
   echo ""
   echo "  Project: NameDrop"
   echo "  Location: $SCRIPT_DIR"
@@ -442,19 +466,24 @@ show_project_info() {
 
 install_deps() {
   log_info "Installing dependencies..."
+  log_cmd "uv sync"
   run_with_spinner "Running uv sync" uv sync
 }
 
 type_check() {
   log_info "Running type check with mypy..."
   if command -v mypy >/dev/null 2>&1; then
+    log_cmd "mypy . --ignore-missing-imports"
     run_with_spinner "Running mypy" mypy . --ignore-missing-imports || true
   elif uv run mypy --version >/dev/null 2>&1; then
+    log_cmd "uv run mypy . --ignore-missing-imports"
     run_with_spinner "Running mypy via uv" uv run mypy . --ignore-missing-imports || true
   else
     log_warn "mypy not found"
     if confirm "Would you like to install mypy? [y/N] "; then
+      log_cmd "uv add --dev mypy"
       run_with_spinner "Installing mypy" uv add --dev mypy
+      log_cmd "uv run mypy . --ignore-missing-imports"
       run_with_spinner "Running mypy" uv run mypy . --ignore-missing-imports || true
     fi
   fi

@@ -1,8 +1,6 @@
 # Local only files
 local/
 test-files/
-run.sh
-main.ui
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -111,8 +109,8 @@ env.bak/
 venv.bak/
 
 # uv
+# Note: uv.lock should be committed (like package-lock.json) for reproducible builds
 .uv/
-uv.lock
 
 # Spyder project settings
 .spyderproject

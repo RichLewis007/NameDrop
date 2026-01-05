@@ -57,7 +57,13 @@ uv sync
 ## Usage
 
 ```bash
-python main.py
+uv run namedrop
+```
+
+Or if installed:
+
+```bash
+namedrop
 ```
 
 1. Drag a file or folder onto the window
@@ -77,7 +83,7 @@ Settings are stored in your system's standard configuration location.
 
 ## Platform Restrictions
 
-For detailed information about filename restrictions across different operating systems and file systems (Windows, macOS, Linux, Cloud Drives, FAT32), see [PLATFORM-RESTRICTIONS.md](PLATFORM-RESTRICTIONS.md).
+For detailed information about filename restrictions across different operating systems and file systems (Windows, macOS, Linux, Cloud Drives, FAT32), see [platform-restrictions.md](platform-restrictions.md).
 
 ## Author
 

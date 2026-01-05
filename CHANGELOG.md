@@ -23,14 +23,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Displays directory sizes before deletion
   - Prompts for confirmation (y/N, defaults to No)
   - Optionally recreates the virtual environment after deletion
+- **Project Restructure**: Restructured project to follow Python packaging best practices
+  - Moved all source code to `src/namedrop/` directory (src-layout)
+  - Moved UI files to `src/namedrop/ui/` directory
+  - Added `__init__.py` for proper package structure
+  - Updated imports to use relative imports
+  - Added entry point in `pyproject.toml`: `namedrop = "namedrop.main:main"`
+- **Qt Designer UI File Support**: Integrated Qt Designer UI file loading
+  - Application now loads `main.ui` from `src/namedrop/ui/` directory
+  - Uses PySide6 best practices with `QFile` and `QIODevice` for UI loading
+  - Falls back to programmatic UI if UI file cannot be loaded
+  - Custom widgets (DragDropWidget, FileNameDisplay, LEDIndicator) replace basic widgets from UI file
+  - Missing sections added programmatically after UI file loads
 
 ### Changed
 
 - **Development Script - Clean Cache**: Enhanced `clean_cache` function in `run.sh`
   - Now displays all cache files and directories that will be deleted before deletion
-  - Shows counts for each type (__pycache__ directories, *.pyc files, *.pyo files)
+  - Shows counts for each type (**pycache** directories, _.pyc files, _.pyo files)
   - Lists all files/directories that will be deleted
   - Prompts for user confirmation (y/N, defaults to No) before deleting
+- **Project Structure**: Restructured to src-layout following Python packaging best practices
+  - Source files moved from root to `src/namedrop/`
+  - UI files moved to `src/namedrop/ui/`
+  - Updated `pyproject.toml` with build system configuration and entry points
+  - Updated `menu.sh` to use `uv run namedrop` instead of `uv run python main.py`
+  - Updated `README.md` with new usage instructions
+- **UI File Loading**: Improved UI file loading implementation
+  - Now uses `QFile` and `QIODevice` following PySide6 best practices
+  - Better error handling with descriptive error messages
+  - Proper resource management with file closing
+- **Window Position Validation**: Enhanced window position validation to prevent Qt warnings
+  - Validates and clamps window position before moving to prevent "outside known screen" warnings
+  - Validates position when saving settings
+  - Validates screen centering calculations
+- **Development Script - Project Info**: Updated "Project info" menu item
+  - Now shows Python version from uv-managed environment using `uv python find`
+  - More accurate version information for the actual runtime environment
+- **.gitignore**: Updated to reflect project structure changes
+  - Removed `uv.lock` from ignored files (should be committed for reproducible builds)
+  - Removed outdated comment about `main.ui` (now properly integrated)
 
 ## [0.2.0] - 2024-12-13
 
@@ -65,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Settings persist across application restarts
   - Characters in allowed list are excluded from highlighting and all rename operations
 - **Documentation**: Comprehensive filename restrictions documentation
-  - `local/filename-restrictions.md` with detailed platform restrictions
+  - `docs/filename-restrictions.md` with detailed platform restrictions
   - Covers Windows, macOS, Linux, and major cloud platforms (AWS S3, Google Cloud, Azure, Dropbox, OneDrive)
   - Includes character restrictions, position restrictions, reserved names, and additional limitations
 

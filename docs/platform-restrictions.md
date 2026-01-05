@@ -267,4 +267,4 @@ If you want near-zero surprises across Windows/macOS/Linux/tools and cloud platf
 - **Case sensitivity**: Windows and macOS are case-insensitive (but case-preserving), while Linux is case-sensitive.
 - **Unicode**: Most modern file systems support Unicode characters, but for maximum compatibility, it's recommended to use standard ASCII characters.
 
-For more detailed technical information, see [local/filename-restrictions.md](local/filename-restrictions.md).
+For more detailed technical information, see [docs/filename-restrictions.md](local/filename-restrictions.md).
